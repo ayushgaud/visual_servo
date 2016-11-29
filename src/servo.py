@@ -12,6 +12,7 @@ import cv2
 import std_msgs.msg
 from sensor_msgs.msg import Image
 import geometry_msgs.msg
+from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge, CvBridgeError
 from ftplib import FTP
 import rospkg
@@ -35,73 +36,55 @@ class image_converter:
     transformer = caffe.io.Transformer({'img0': net.blobs['img0'].data.shape,'img1': net.blobs['img1'].data.shape})
     transformer.set_transpose('img0', (2,0,1))
     transformer.set_transpose('img1', (2,0,1))
+    print("Network Initialization Complete!")
     #transformer.set_raw_scale('data', 255)      # rescale from [0, 1] to [0, 255]
     #transformer.set_channel_swap('data', (2,1,0))  # swap channels from RGB to BGR
     self.bridge = CvBridge()
-    #self.image_sub = rospy.Subscriber("/bebop/image_raw",Image,self.callback)
-    self.pose_pub = rospy.Publisher("/bebop/cmd_vel", geometry_msgs.msg.Twist, queue_size=1)
-    self.img_cap = rospy.Publisher("/bebop/snapshot", std_msgs.msg.Empty, queue_size=1)
-    self.img_cap.publish()
+    self.image_sub = rospy.Subscriber("/bebop/image_raw",Image,self.callback)
+    self.pose_pub = rospy.Publisher("/bebop/self.cmd_vel", geometry_msgs.msg.Twist, queue_size=1)
+    #self.img_cap = rospy.Publisher("/bebop/snapshot", std_msgs.msg.Empty, queue_size=1)
+    #self.img_cap.publish()
+    rospy.Subscriber('/bebop/odom',Odometry,self.pose_callback)
+    
+    rospy.Timer(rospy.Duration(0.05), self.command)
     rospy.Timer(rospy.Duration(0.1), self.process)
+    
     self.flag = 0
+    self.img2=cv2.imread('f.png')  
+    self.img2 = cv2.resize(self.img2,(512,384), interpolation = cv2.INTER_LINEAR)
+    self.img1 = self.img2
 
   def callback(self,data):
     try:
        global cv_image
        self.cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+       self.img1 = cv2.resize(self.cv_image,(512,384), interpolation = cv2.INTER_LINEAR)
     except CvBridgeError, e:
       print e
+  def command(self,event=None):
+    try:
+      self.error = abs(self.curr_pose.position.x - self.cmd.linear.x) + abs(self.curr_pose.position.y - self.cmd.linear.y) + abs(self.curr_pose.position.z - self.cmd.linear.z)
+      thr = 5e-2
+      if self.error >= thr:
+        #self.pose_pub.publish(self.cmd)
+        print("self.error: ", self.error)
+    except Exception as e:
+      print e.message, e.args
+      self.error = 0
+
+  def pose_callback(self,data):
+    self.curr_pose = data.pose.pose
+  
   def process(self,event=None):
     try:
 
       t1 = rospy.get_rostime()
-      #img1 = self.bridge.imgmsg_to_cv2(data, "bgr8")
-      ftp = FTP('192.168.42.1')
-      ftp.login()
-      ftp.cwd('/internal_000/Bebop_2/media')
-      data = []
-      ftp.dir(data.append)
-      a = "\n".join(s for s in data if 'jpg' in s)
-      filename = a[a.find('B',a.rfind('jpg') - 45, a.rfind('jpg')) :a.rfind('jpg') + 3]
-      print filename
-      try:
-      	ftp.retrbinary("RETR " + filename ,open(filename, 'wb').write)
-      	ftp.delete(filename)
-      	ftp.quit()
+      #cv2.imshow("Image_Filtered", self.img1)
+      #cv2.waitKey(3)
       
-      	img1 = cv2.imread(filename)
-      except:
-      	self.img_cap.publish()
-      	self.process()
 
-      #img = cv2.resize(img,(1536,864), interpolation = cv2.INTER_LINEAR)
-
-      #img1 = img[864*0.5 - 184 - 100:864*0.5 + 184 - 100,1536*0.5 - 320:1536*0.5 + 320]
-
-      #clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-
-      #img1 = cv2.cvtColor(img1,36)
-      #y,u,v = cv2.split(img1)
-
-      #v = clahe.apply(v)
-
-      #img1 = cv2.cvtColor(cv2.merge((y,u,v)),38)
-
-      
-      img1 = cv2.resize(img1,(512,384), interpolation = cv2.INTER_LINEAR)
-      cv2.imshow("Image_Filtered", img1)
-      cv2.waitKey(3)
-      img2=cv2.imread('f.jpg')
-
-      #img2 = cv2.cvtColor(img2,36)
-      #y,u,v = cv2.split(img2)
-      
-      #v = clahe.apply(v)
-      #img2 = cv2.cvtColor(cv2.merge((y,u,v)),38)
-
-      img2 = cv2.resize(img2,(512,384), interpolation = cv2.INTER_LINEAR)
-      net.blobs['img0'].data[...] = transformer.preprocess('img0', img1)
-      net.blobs['img1'].data[...] = transformer.preprocess('img1', img2)
+      net.blobs['img0'].data[...] = transformer.preprocess('img0', self.img1)
+      net.blobs['img1'].data[...] = transformer.preprocess('img1', self.img2)
       tic=time.time()
       output=net.forward()
       toc=time.time()
@@ -133,47 +116,22 @@ class image_converter:
       #z = -y
       #x = z
 
-      cmd = geometry_msgs.msg.Twist()
-      cmd.linear.x =  np.sign(tvel[2])*min(abs(tvel[2]),thresh)
-      cmd.linear.y = -np.sign(tvel[0])*min(abs(tvel[0]),thresh)
-      cmd.linear.z = -np.sign(tvel[1])*min(abs(tvel[1]),thresh)
+      self.cmd = geometry_msgs.msg.Twist()
+      self.cmd.linear.x =  np.sign(tvel[2])*min(abs(tvel[2]),thresh)
+      self.cmd.linear.y = -np.sign(tvel[0])*min(abs(tvel[0]),thresh)
+      self.cmd.linear.z = -np.sign(tvel[1])*min(abs(tvel[1]),thresh)
 
-      #cmd.angular.x = euler[2]
-      #cmd.angular.y = -euler[0]
-      cmd.angular.z = -euler[1]
+      #self.cmd.angular.x = euler[2]
+      #self.cmd.angular.y = -euler[0]
+      self.cmd.angular.z = -euler[1]
 
       r = rospy.Rate(30) # 30hz
-      prev = rospy.get_rostime()
-      now = rospy.get_rostime()
 
-      if self.flag > 0:
-      	print cmd	
-      	while now.secs - prev.secs < 4:
-		    self.pose_pub.publish(cmd)
-		    r.sleep()
-		    now = rospy.get_rostime()
-		    
-      self.flag = 1
-      cmd.linear.x = 0
-      cmd.linear.y = 0
-      cmd.linear.z = 0
+      #print("Command: ", self.cmd)
+      #print("Curr_pose: ",self.curr_pose)
 
-      cmd.angular.x = 0
-      cmd.angular.y = 0
-      cmd.angular.z = 0
-      prev = rospy.get_rostime()
-      now = rospy.get_rostime()
-      
-      while now.secs - prev.secs < 0.1:
-        self.pose_pub.publish(cmd)
-        r.sleep()
-        now = rospy.get_rostime()
-      self.img_cap.publish() 
-      #print now.secs - t1.secs
-    except:
-      pass
-        #cv2.imshow("Image window", cv_image)
-        #cv2.waitKey(3)
+    except Exception as e:
+      print e.message, e.args
 def main(args):
   rospy.init_node('image_converter', anonymous=True)
   ic = image_converter()

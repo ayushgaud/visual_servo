@@ -2,4 +2,4 @@
 
 **Author** Ayush Gaud
 
-**Description** IBVS using deep neural network
+**Description** IBVS using Deep Neural Networks
